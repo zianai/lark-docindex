@@ -27,24 +27,24 @@ SPACE_ID = os.environ.get("SPACE_ID", "")
 
 def cli(cmd):
     """Execute lark-cli command and return parsed JSON."""
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
-        print(f"  [WARN] Command failed: {cmd[:80]}...")
+        print(f"  [WARN] Command failed: {' '.join(cmd[:4])}...")
         return None
     try:
         return json.loads(r.stdout)
-    except:
+    except json.JSONDecodeError:
         return None
 
 def api(method, path, data=None):
     """Call lark-cli api directly."""
-    cmd = f'lark-cli api {method} "{path}"'
-    if data:
-        cmd += f" --data '{json.dumps(data, ensure_ascii=False)}'"
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+    cmd = ["lark-cli", "api", method, path]
+    if data is not None:
+        cmd.extend(["--data", json.dumps(data, ensure_ascii=False)])
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     try:
         return json.loads(r.stdout)
-    except:
+    except json.JSONDecodeError:
         return None
 
 def main():
@@ -52,7 +52,7 @@ def main():
     if len(sys.argv) > 2 and sys.argv[1] == "--docs":
         docs_file = sys.argv[2]
 
-    with open(docs_file) as f:
+    with open(docs_file, encoding="utf-8") as f:
         docs = json.load(f)
 
     print(f"加载 {len(docs)} 篇文档")
@@ -60,12 +60,15 @@ def main():
     # Step 1: 创建或使用已有 Base
     if not BASE_TOKEN:
         print("\n[1] 创建 Base...")
-        r = cli('lark-cli base +base-create --name "文档导航中心"')
+        r = cli(["lark-cli", "base", "+base-create", "--name", "文档导航中心"])
         # parse base_token from output
         print(f"  请设置 BASE_TOKEN 环境变量")
         return
     else:
         print(f"\n[1] 使用已有 Base: {BASE_TOKEN}")
+        if not TABLE_ID:
+            print("  错误: 请同时设置 TABLE_ID 环境变量")
+            return
 
     # Step 2: 导入记录
     print(f"\n[2] 导入 {len(docs)} 条记录到 Base...")
@@ -78,10 +81,9 @@ def main():
             "来源": "云盘",
             "所有者": doc.get("owner", ""),
             "标签": auto_tag(doc["title"]),
-            "状态": "已索引"
+            "状态": "待整理"
         }
-        body = json.dumps({"fields": fields}, ensure_ascii=False)
-        r = api("POST", f"/open-apis/bitable/v1/apps/{BASE_TOKEN}/tables/{TABLE_ID}/records", body)
+        r = api("POST", f"/open-apis/bitable/v1/apps/{BASE_TOKEN}/tables/{TABLE_ID}/records", {"fields": fields})
         if r and r.get("code") == 0:
             success += 1
     print(f"  导入成功: {success}/{len(docs)}")

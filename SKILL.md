@@ -581,7 +581,7 @@ Users click hyperlinks in Feishu client to jump to originals. Originals stay in 
 
 Fields: 标题(text) | 类型(singleSelect: docx/sheet/bitable/mindnote/slides) |
 来源(singleSelect: Drive/Wiki/聊天/共享) | 创建时间(date) | 编辑时间(date) |
-标签(multiSelect) | 链接(link) | AI摘要(text) | 状态(singleSelect: 待整理/已索引)
+标签(multiSelect) | 链接(link) | AI摘要(text) | 状态(singleSelect: 待整理/已整理/待复核/已归档)
 
 ### API Pitfalls (Base + Wiki)
 
@@ -687,14 +687,15 @@ lark-cli api PUT "/open-apis/bitable/v1/apps/TOKEN/tables/TBL/records/REC_ID" \
 # validation errors even when single PUT works. Prefer single PUT loops for reliability.
 ```
 
-### Verified End-to-End Execution (May 2026)
+### End-to-End Execution Template
 
-Completed full 方案1+3 build with real data. 51 documents indexed, 9 navigation cards created, 7 dashboard blocks.
+The workflow below shows how to create your own Base, Wiki space, and dashboard.
+Replace every placeholder token with resources from your own Feishu/Lark tenant.
 
-**Resources created:**
-- Base "文档导航中心": base_token=`KgBBbaBGJaP1tvsjVd6cU79Rnmc`, table `tblkB8prGR05ULlz`
-- Wiki "文档导航中心": space_id=`7636032943726545882`, root_node=`CuR5wpRDQiJdDYkPn9lc6fuUnBg`
-- Dashboard: `blktcvgYwmaEhhYG`
+**Resource placeholders:**
+- Base: `YOUR_BASE_TOKEN`, table `YOUR_TABLE_ID`
+- Wiki: `YOUR_SPACE_ID`, root node `YOUR_ROOT_NODE`
+- Dashboard: `YOUR_DASHBOARD_ID`
 
 **Step 0 -- Wiki space creation:**
 ```bash

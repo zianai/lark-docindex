@@ -1,86 +1,121 @@
 #!/usr/bin/env python3
-"""
-update_cards.py -- 根据当前 Base 数据重新生成所有 Wiki 索引卡片
+"""Update Wiki index cards from normalized local document data.
 
 用法:
-  python3 update_cards.py
+  python3 update_cards.py [--data data/final_data.json] [--dry-run]
 
 功能:
-  1. 从 Base 读取全部记录
+  1. 读取本地记录快照
   2. 按类型/主题分组
   3. 重写全部 Wiki 索引卡片（含格式化内容）
-  4. 更新根页面（含统计信息）
+  4. 更新最近更新卡片
 """
 
-import subprocess, json, sys, os, re
-from collections import Counter, defaultdict
+from __future__ import annotations
 
-BASE_TOKEN = os.environ.get("BASE_TOKEN", "KgBBbaBGJaP1tvsjVd6cU79Rnmc")
-TABLE_ID = os.environ.get("TABLE_ID", "tblkB8prGR05ULlz")
+import argparse
+import subprocess
+import sys
 
-# Wiki 卡片 obj_token 映射
-CARDS = {
-    "DOCX": "V0PKdbuLAomanQxc87xcEURvnXg",
-    "BITABLE": "NDBhd2n3so4Vohx7R4hcKGCfnie",
-    "AI/图像生成": "GQcFdwGxEo30bZxuc9zcflFcnJb",
-    "开源/教程": "AjL1dmFPZoyvwjxPmQucxZbLnCh",
-    "生活/其他": "DA8jdkD1LoosZ7xnnTIcm8DunLf",
-    "比赛/活动": "AuVvdDHPBoa0G6xSX6ucK70mnWe",
-    "Agent/产品": "JtGTdZL7toX5T4xPmQ0ckDuunhg",
-    "飞书CLI": "ScqhdBf1VooJF3xtrPycIKhln9g",
-    "最近更新": "BosBdIzOioZYAAxiUNAc0VjNn9e",
-}
-ROOT_OBJ = "UvbAd4rHfodayPxXd3Tc39gLnon"
+from docindex_lib import group_records, load_json, normalize_records, validate_records
+from normalize_data import extract_records
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data", default="data/final_data.json", help="record list or grouped data JSON")
+    parser.add_argument("--cards-map", help="JSON file mapping card names to Feishu doc obj_token")
+    parser.add_argument("--dry-run", action="store_true", help="render and validate without writing Feishu docs")
+    parser.add_argument("--strip-anchor", action="store_true", help="remove URL fragments before grouping")
+    parser.add_argument("--dedupe-canonical", action="store_true", help="dedupe URLs after removing fragments")
+    parser.add_argument("--recent-limit", type=int, default=20)
+    return parser.parse_args()
+
+
+def load_cards_map(path: str | None, grouped: dict[str, object], dry_run: bool) -> dict[str, str]:
+    if path:
+        payload = load_json(path)
+    else:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise SystemExit("--cards-map must be a JSON object")
+    if payload:
+        return {str(key): str(value) for key, value in payload.items()}
+    if not dry_run:
+        raise SystemExit("missing --cards-map for non-dry-run card updates")
+    keys = list(grouped.get("by_type", {}).keys()) + list(grouped.get("by_tag", {}).keys()) + ["最近更新"]
+    return {key: f"dry_{key}" for key in dict.fromkeys(keys)}
+
 
 def update_doc(obj_token, markdown):
     """Write markdown content to a Feishu doc via stdin pipe."""
-    cmd = f'cat | lark-cli docs +update --doc "{obj_token}" --mode overwrite --markdown - 2>&1'
-    r = subprocess.run(cmd, shell=True, input=markdown, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        ["lark-cli", "docs", "+update", "--doc", obj_token, "--mode", "overwrite", "--markdown", "-"],
+        input=markdown,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     return '"ok": true' in (r.stdout + r.stderr)
 
+
+def render_card(title, docs, subtitle=""):
+    md = f"# {title}\n\n"
+    if subtitle:
+        md += f"{subtitle}\n\n"
+    md += f"共 **{len(docs)}** 篇文档。\n\n---\n\n"
+    for d in docs:
+        owner = f" - {d.get('owner')}" if d.get("owner") else ""
+        updated = f" - {d.get('updated')}" if d.get("updated") else ""
+        md += f"- [{d.get('title', '')}]({d.get('url', '')}){owner}{updated}\n"
+    md += "\n---\n\n> 点击标题跳转原始文档。\n"
+    return md
+
+
 def main():
-    print("从 Base 读取记录...")
-    # 这里需要实际的记录读取逻辑
-    # 简化版：从 final_data.json 读取
-    data_file = "data/final_data.json"
-    if not os.path.exists(data_file):
-        print(f"错误: 找不到 {data_file}，请先运行 build_index.py")
+    args = parse_args()
+    print(f"读取记录: {args.data}")
+    data = load_json(args.data)
+    raw_records = extract_records(data)
+    records = normalize_records(
+        raw_records,
+        keep_anchor=not args.strip_anchor,
+        dedupe=True,
+        dedupe_canonical=args.dedupe_canonical,
+    )
+    errors = validate_records(records)
+    if errors:
+        print(f"错误: 数据校验失败 ({len(errors)} errors)")
+        for error in errors[:30]:
+            print(f"  - {error}")
         sys.exit(1)
 
-    with open(data_file) as f:
-        data = json.load(f)
+    grouped = group_records(records)
+    by_type = grouped["by_type"]
+    by_tag = grouped["by_tag"]
+    recent = grouped["recent"][: args.recent_limit]
+    cards = load_cards_map(args.cards_map, grouped, args.dry_run)
 
-    by_type = data.get("by_type", {})
-    by_tag = data.get("by_tag", {})
-
-    total = sum(len(v) for v in by_type.values())
-    print(f"共 {total} 条记录")
+    print(f"共 {len(records)} 条有效记录 (原始 {len(raw_records)} 条)")
 
     # 生成各卡片
-    for card_key, obj_token in CARDS.items():
+    for card_key, obj_token in cards.items():
         if card_key in by_type:
             docs = by_type[card_key]
-            emoji = "📄" if card_key == "DOCX" else "📊"
-            md = f"# {emoji} {card_key} 类索引\n\n共 **{len(docs)}** 篇。\n\n---\n\n"
+            icon = "📄" if card_key == "DOCX" else "📊"
+            md = render_card(f"{icon} {card_key} 类索引", docs)
         elif card_key in by_tag:
             docs = by_tag[card_key]
-            md = f"# {card_key}\n\n共 **{len(docs)}** 篇文档。\n\n---\n\n"
+            md = render_card(card_key, docs)
         elif card_key == "最近更新":
-            docs = []  # 需要从 all records 排序
-            md = "# 最近更新\n\n---\n\n"
+            docs = recent
+            md = render_card("最近更新", docs, subtitle=f"按更新时间排序，展示前 {len(docs)} 条。")
         else:
             continue
 
-        for d in docs:
-            title = d.get("title", "")
-            url = d.get("url", "")
-            md += f"- [{title}]({url})\n"
-        md += "\n---\n\n> 点击标题跳转原始文档。\n"
-
-        ok = update_doc(obj_token, md)
+        ok = True if args.dry_run else update_doc(obj_token, md)
         print(f"  卡片 '{card_key}' ({len(docs)}): {'OK' if ok else 'FAIL'}")
 
-    print("\n全部卡片更新完成!")
+    print("\n全部卡片处理完成!")
 
 if __name__ == "__main__":
     main()
